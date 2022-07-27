@@ -1,63 +1,115 @@
 """
-Сейчас буду разбираться с другими потовыми сервисами
-Если разберусь изменю код так, чтобы можно было удобно добавлять несколько аккаунтов + использовать какие либо фильтры.
-Еще планирую обязательно добавить удаление прочитанных сообщений, или загрузку только новых
+Программа протестированна в mail.ru, yandex.ru, gmail.com. Позже добавим остальные почтовые сервисы
+Для того чтобы работала программа, заходим на вашу почту через веб интерфейс
+->>безопасность ->>двухфакторная авторизация ->>создаем пароль для стороннего приложения
+Этот пароль вам нужно будет использоватся в этой программе, иначе вы не авторизуетесь
+->> Заходим в папку setup, открываем setup.cfg. Там есть пример настройки
+
+Программа создает в папке temp .html файл на каждую учетную запись с вашими письмами,  и открывает их в вашем браузере по умолчанию
+Сторонних библиотек не используется, все есть в коробке Python
+
+Пока не добаивл перенос прочитанных сообщений в корзину.
+Но Скоро добавлю
+
 """
 
-import imapclient
-import pyzmail
+import imaplib
+import email
+
+del_message = 0
+auth_data = {}
+server = {'@mail.ru': 'imap.mail.ru', '@yandex.ru': 'imap.yandex.ru', '@gmail.com': 'imap.gmail.com'}
 
 
-def connect(): # Подключаемся к аккаунту, заходим в папку Входящие
-    login = '***2-3@mail.ru'
-    password = 'Sx***PDpFvxb'
-    server = 'imap.mail.ru'
+def init():
+    """Main Def"""
+    global del_message
+    global auth_data
 
-    imapObj = imapclient.IMAPClient(server, ssl=True)
-    imapObj.login(login, password)
-    imapObj.select_folder('INBOX', readonly=True)
-    UIDs = imapObj.search(['ALL'])
-    iter_mess(UIDs, imapObj)
-
-
-def iter_mess(UIDs, imapObj):# Итерируем по входящим
-    global result
-    number = 1
-    for id_s in UIDs:
-        result += (f'===---===---===---===---===---===---===---\nСообщение №{number}\n')
-        rawMessages = imapObj.fetch(id_s, ['BODY[]'])
-        result += give_text_message(rawMessages, id_s)
-        number+=1
-    imapObj.logout()
-
-
-def give_text_message(r_mess, id_mes): #Приводим сырой E-mail в человеческий вид
-    message = pyzmail.PyzMessage.factory(r_mess[id_mes][b'BODY[]'])
-    fr_m = message.get_addresses('from')
-    to = message.get_addresses('to')
-    subject = message.get_subject()
-    if message.text_part != None:
-        txt_message = message.text_part.get_payload().decode(message.html_part.charset)
-    else:
-        txt_message = message.get_payload()
-        txt_message = txt_message.replace("</div>", "\n") # Это конечно ужасно, но пока я не знаю как иначе
-        txt_message = txt_message.replace("<div>", "")
-
-    result = (f''
-        f'{"Сообщение от пользователя:".ljust(29)}{fr_m[0][0]} \t e-mail:{fr_m[0][1]}\n'
-        f'{"На вашу почту:".ljust(28)} {to[0][1]}\n'
-        f'{"Тема:".ljust(28)} {subject}\n\n'
-        f'{"Сообщение:".ljust(28)}\n{txt_message}'
-        f'===---===---===---===---===---===---===---\n\n')
-    return result
+    try:
+        with open("setup/setup.cfg", "r", encoding="utf-8") as file:
+            for line in file:
+                if not line.startswith('#'):
+                    if line.startswith('Delete'):
+                        del_message = line.split('=')[1]
+                    if "@" in line:
+                        temp = line.split(" ")
+                        auth_data[temp[0].strip()] = temp[1].strip()
+        for user, password in auth_data.items():
+            imap = server.get(user[user.find("@"):])
+            if server:
+                mail_obj = authorization(user, password, imap)
+                id_list, mail = give_message_indox(mail_obj)
+                result = give_html_text(id_list, mail, user)
+                create_and_open_html(result, user)
+            else:
+                print("Unsupported server (Неподдерживаемый сервер)")
+                input("Нажмите Enter чтобы продолжить")
+    except:
+        print("Сорян, мы кое-что не учли. Напишите нам если есть минутка vv.aa.ss@yandex.ru")
+        input()
+    return 0
 
 
-def save_to_file(text):
-    with open("mail.txt", 'w', encoding="utf-8") as file:
-        file.write(result)
+def authorization(user, password, server):
+    """АВТОРИЗАЦИЯ"""
+    mail = imaplib.IMAP4_SSL(server)
+    mail.login(user, password)
+    return mail
+
+
+def give_message_indox(mail):
+    """ЛОКАЦИЯ"""
+    mail.list()
+    mail.select("inbox")
+    result, data = mail.search(None, "ALL")
+    ids = data[0]
+    id_list = ids.split()
+    return id_list, mail
+
+
+def give_html_text(ids_list, mail, user):
+	"""ПРЕОБРАЗУЕМ СЫРОЕ СООБЩЕНИЕ В HTML"""
+    letter_count = 1
+    all_text = f'<!DOCTYPE html>' \
+                f'<html>' \
+                    f'<head>' \
+                    f'<meta charset="utf-8">' \
+                    f'<meta name="description" content="some text">' \
+                    f'<title>{user}</title>' \
+                    f'</head>'
+
+    """СОБИРАЕМ СООБЩЕНИЯ"""
+    for latest_email_id in ids_list[-1:0:-1]:
+        result, data = mail.fetch(latest_email_id, "(RFC822)")
+        raw_email = data[0][1]
+        raw_email_string = raw_email.decode('utf-8-sig')
+        email_message = email.message_from_string(raw_email_string)
+        all_text += f'<hr>\n\n<p><font size="11" color="#008B8B" face="Comic Sans MS"><center>Letter #{letter_count}</center></font></p><hr>'
+        """ЕСЛИ НЕ ОДНА ЧАСТЬ (HTML + TEXT)"""
+        if email_message.is_multipart():
+            mes_count = 1
+            """ЕСЛИ ТОЛЬКО HTML БЕРЕМ ЕГО, ИНАЧЕ ТОЖЕ САМОЕ, НО БЕРЕМ ПО ДРУГОМУ ИНДЕКСУ"""
+            if len(email_message.get_payload()) == 1:
+                mes_count = 0
+            body = email_message.get_payload()[mes_count].get_payload(decode=True).decode('utf-8')
+            all_text += f'\n{body}\n\n'
+        else:
+            """ДРУГИЕ СЛУЧАИ"""
+            body = email_message.get_payload(decode=True).decode('utf-8')
+            all_text += f'{body}\n\n'
+        letter_count += 1
+    return all_text
+
+
+def create_and_open_html(text, user):
+    import webbrowser
+    import os
+    with open(f"temp/{user}_result.html", "w", encoding="utf-8-sig") as file:
+        file.write(text)
+    file = os.path.abspath(f"temp/{user}_result.html")
+    webbrowser.open(f'file://{file}', 2)
 
 
 if __name__ == '__main__':
-    result = ""
-    connect()
-    save_to_file(result)
+    init()
